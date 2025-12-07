@@ -147,7 +147,7 @@ train_data, val_data = train_test_split(dataset, test_size=0.1)
 
 # 创建数据加载器
 batch_size = 32
-train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
 
