@@ -11,6 +11,8 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from sklearn.model_selection import train_test_split
 import math
+from tqdm import tqdm
+import sys
 
 # 检查是否有可用的 GPU
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -20,7 +22,7 @@ print(f'Using device: {device}')
 # 读取原始数据并提取英文和中文句子
 
 file_path = 'data/cmn.txt'  # 请确保数据文件位于该路径下
-
+min_loss = math.inf
 # 读取文件并处理每一行，提取英文和中文句子
 data = []
 with open(file_path, 'r', encoding='utf-8') as file:
@@ -47,9 +49,11 @@ print(df.head())
 # 定义英文和中文的分词器
 tokenizer_en = get_tokenizer('basic_english')
 
+
 # 中文分词器：将每个汉字作为一个 token
 def tokenizer_zh(text):
     return list(text)
+
 
 # 构建词汇表的函数
 def build_vocab(sentences, tokenizer):
@@ -59,12 +63,15 @@ def build_vocab(sentences, tokenizer):
     :param tokenizer: 分词器函数
     :return: 词汇表对象
     """
+
     def yield_tokens(sentences):
         for sentence in sentences:
             yield tokenizer(sentence)
+
     vocab = build_vocab_from_iterator(yield_tokens(sentences), specials=['<unk>', '<pad>', '<bos>', '<eos>'])
     vocab.set_default_index(vocab['<unk>'])  # 设置默认索引为 <unk>
     return vocab
+
 
 # 从文件中加载句子
 with open('data/english_sentences.txt', 'r', encoding='utf-8') as f:
@@ -80,6 +87,7 @@ zh_vocab = build_vocab(chinese_sentences, tokenizer_zh)
 print(f'英文词汇表大小：{len(en_vocab)}')
 print(f'中文词汇表大小：{len(zh_vocab)}')
 
+
 # 定义将句子转换为索引序列的函数
 def process_sentence(sentence, tokenizer, vocab):
     """
@@ -94,6 +102,7 @@ def process_sentence(sentence, tokenizer, vocab):
     indices = [vocab[token] for token in tokens]
     return indices
 
+
 # 将所有句子转换为索引序列
 en_sequences = [process_sentence(sentence, tokenizer_en, en_vocab) for sentence in english_sentences]
 zh_sequences = [process_sentence(sentence, tokenizer_zh, zh_vocab) for sentence in chinese_sentences]
@@ -101,6 +110,7 @@ zh_sequences = [process_sentence(sentence, tokenizer_zh, zh_vocab) for sentence 
 # 查看示例句子的索引序列
 print("示例英文句子索引序列：", en_sequences[0])
 print("示例中文句子索引序列：", zh_sequences[0])
+
 
 # 创建数据集和数据加载器
 
@@ -115,6 +125,7 @@ class TranslationDataset(Dataset):
     def __getitem__(self, idx):
         return torch.tensor(self.src_sequences[idx]), torch.tensor(self.trg_sequences[idx])
 
+
 def collate_fn(batch):
     """
     自定义的 collate_fn，用于将批次中的样本进行填充对齐
@@ -127,6 +138,7 @@ def collate_fn(batch):
     trg_batch = pad_sequence(trg_batch, padding_value=zh_vocab['<pad>'], batch_first=True)
     return src_batch, trg_batch
 
+
 # 创建数据集对象
 dataset = TranslationDataset(en_sequences, zh_sequences)
 
@@ -135,8 +147,9 @@ train_data, val_data = train_test_split(dataset, test_size=0.1)
 
 # 创建数据加载器
 batch_size = 32
-train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
 
 # Step 3: Transformer 模型构建
 
@@ -161,11 +174,12 @@ class ScaledDotProductAttention(nn.Module):
         output = torch.matmul(attn, V)  # [batch_size, heads, seq_len, d_v]
         return output, attn
 
+
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model, num_heads):
         super().__init__()
         assert d_model % num_heads == 0, "d_model 必须能被 num_heads 整除"
-        self.d_k = self.d_v = d_model // num_heads
+        self.d_k = d_model // num_heads
         self.num_heads = num_heads
 
         # 定义线性变换层
@@ -181,19 +195,17 @@ class MultiHeadAttention(nn.Module):
         batch_size = Q.size(0)
 
         # 线性变换并分头
-        Q = self.w_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1,2)
-        K = self.w_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1,2)
-        V = self.w_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1,2)
+        Q = self.w_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        K = self.w_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        V = self.w_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
-        # 计算注意力
-        if mask is not None:
-            mask = mask.unsqueeze(1)  # 扩展维度以匹配多头
         output, attn = self.attention(Q, K, V, mask=mask)
 
         # 拼接多头的输出
-        output = output.transpose(1,2).contiguous().view(batch_size, -1, self.num_heads * self.d_k)
+        output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.num_heads * self.d_k)
         output = self.fc(output)
         return output
+
 
 # 定义前馈神经网络
 class PositionwiseFeedForward(nn.Module):
@@ -206,6 +218,7 @@ class PositionwiseFeedForward(nn.Module):
 
     def forward(self, x):
         return self.fc2(self.dropout(self.relu(self.fc1(x))))
+
 
 # 定义位置编码
 class PositionalEncoding(nn.Module):
@@ -225,6 +238,7 @@ class PositionalEncoding(nn.Module):
         # x: [batch_size, seq_len, d_model]
         x = x + self.pe[:, :x.size(1)].to(x.device)
         return x
+
 
 # 定义编码器层
 class EncoderLayer(nn.Module):
@@ -246,6 +260,7 @@ class EncoderLayer(nn.Module):
         x = x + self.dropout(ffn_output)
         x = self.norm2(x)
         return x
+
 
 # 定义解码器层
 class DecoderLayer(nn.Module):
@@ -274,6 +289,7 @@ class DecoderLayer(nn.Module):
         x = self.norm3(x)
         return x
 
+
 # 定义编码器
 class Encoder(nn.Module):
     def __init__(self, input_dim, d_model, num_heads, d_ff, num_layers, dropout):
@@ -295,6 +311,7 @@ class Encoder(nn.Module):
         for layer in self.layers:
             x = layer(x, src_mask)
         return x
+
 
 # 定义解码器
 class Decoder(nn.Module):
@@ -319,6 +336,7 @@ class Decoder(nn.Module):
             x = layer(x, enc_output, src_mask, trg_mask)
         output = self.fc_out(x)
         return output
+
 
 # 定义 Transformer 模型
 class Transformer(nn.Module):
@@ -347,6 +365,7 @@ class Transformer(nn.Module):
         output = self.decoder(trg, enc_output, src_mask, trg_mask)
         return output
 
+
 # 初始化模型参数
 input_dim = len(en_vocab)
 output_dim = len(zh_vocab)
@@ -365,13 +384,16 @@ model = Transformer(encoder, decoder).to(device)
 criterion = nn.CrossEntropyLoss(ignore_index=zh_vocab['<pad>'])
 optimizer = optim.Adam(model.parameters(), lr=0.0001)
 
+
 # Step 4: 模型训练与验证
 
 # 定义训练函数
-def train(model, dataloader, optimizer, criterion):
+def train(model, dataloader, optimizer, criterion, epoch):
     model.train()
     epoch_loss = 0
-    for src, trg in dataloader:
+    train_tqdm = tqdm(dataloader, file=sys.stdout)
+    for _, data in enumerate(train_tqdm):
+        src, trg = data
         src = src.to(device)
         trg = trg.to(device)
         optimizer.zero_grad()
@@ -383,14 +405,18 @@ def train(model, dataloader, optimizer, criterion):
         loss.backward()
         optimizer.step()
         epoch_loss += loss.item()
+        train_tqdm.desc = 'train epoch: [{}/10], train loss: {}'.format(epoch + 1, loss)
     return epoch_loss / len(dataloader)
 
+
 # 定义验证函数
-def evaluate(model, dataloader, criterion):
+def evaluate(model, dataloader, criterion, epoch):
     model.eval()
     epoch_loss = 0
     with torch.no_grad():
-        for src, trg in dataloader:
+        val_tqdm = tqdm(dataloader, file=sys.stdout)
+        for _, data in enumerate(val_tqdm):
+            src, trg = data
             src = src.to(device)
             trg = trg.to(device)
             output = model(src, trg[:, :-1])
@@ -401,13 +427,20 @@ def evaluate(model, dataloader, criterion):
             epoch_loss += loss.item()
     return epoch_loss / len(dataloader)
 
+
 # 开始训练
 n_epochs = 10
 
 for epoch in range(n_epochs):
-    train_loss = train(model, train_dataloader, optimizer, criterion)
-    val_loss = evaluate(model, val_dataloader, criterion)
-    print(f'Epoch {epoch+1}/{n_epochs}, Train Loss: {train_loss:.3f}, Val Loss: {val_loss:.3f}')
+    train_loss = train(model, train_dataloader, optimizer, criterion, epoch)
+    val_loss = evaluate(model, val_dataloader, criterion, epoch)
+    if val_loss < min_loss:
+        min_loss = val_loss
+        torch.save(model.state_dict(), './best.pth')
+    print(f'Epoch {epoch + 1}/{n_epochs}, Train Loss: {train_loss:.3f}, Val Loss: {val_loss:.3f}')
+
+print('完成训练')
+
 
 # Step 5: 测试与推理
 
@@ -443,6 +476,7 @@ def translate_sentence(sentence, model, en_vocab, zh_vocab, tokenizer_en, max_le
             break
     trg_tokens = [zh_vocab.lookup_token(idx) for idx in trg_indices]
     return ''.join(trg_tokens[1:-1])  # 去除 <bos> 和 <eos>
+
 
 # 示例测试
 input_sentence = "How are you?"
